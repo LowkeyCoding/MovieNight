@@ -7,31 +7,16 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/zorchenhimer/MovieNight/common"
 
 	"github.com/gorilla/websocket"
-	"github.com/nareix/joy4/av/avutil"
-	"github.com/nareix/joy4/av/pubsub"
-	"github.com/nareix/joy4/format/flv"
-	"github.com/nareix/joy4/format/rtmp"
 )
 
 var (
 	//global variable for handling all chat traffic
 	chat *ChatRoom
-
-	// Read/Write mutex for rtmp stream
-	l = &sync.RWMutex{}
-
-	// Map of active streams
-	channels = map[string]*Channel{}
 )
-
-type Channel struct {
-	que *pubsub.Queue
-}
 
 type writeFlusher struct {
 	httpflusher http.Flusher
@@ -347,114 +332,6 @@ func handleIndexTemplate(w http.ResponseWriter, r *http.Request) {
 	err := common.ExecuteServerTemplate(w, "main", data)
 	if err != nil {
 		common.LogErrorf("Error executing file, %v", err)
-	}
-}
-
-func handlePublish(conn *rtmp.Conn) {
-	streams, _ := conn.Streams()
-
-	l.Lock()
-	common.LogDebugln("request string->", conn.URL.RequestURI())
-	urlParts := strings.Split(strings.Trim(conn.URL.RequestURI(), "/"), "/")
-	common.LogDebugln("urlParts->", urlParts)
-
-	if len(urlParts) > 2 {
-		common.LogErrorln("Extra garbage after stream key")
-		l.Unlock()
-		conn.Close()
-		return
-	}
-
-	if len(urlParts) != 2 {
-		common.LogErrorln("Missing stream key")
-		l.Unlock()
-		conn.Close()
-		return
-	}
-
-	if urlParts[1] != settings.GetStreamKey() {
-		common.LogErrorln("Stream key is incorrect.  Denying stream.")
-		l.Unlock()
-		conn.Close()
-		return //If key not match, deny stream
-	}
-
-	streamPath := urlParts[0]
-	_, exists := channels[streamPath]
-	if exists {
-		common.LogErrorln("Stream already running.  Denying publish.")
-		conn.Close()
-		l.Unlock()
-		return
-	}
-
-	ch := &Channel{}
-	ch.que = pubsub.NewQueue()
-	err := ch.que.WriteHeader(streams)
-	if err != nil {
-		common.LogErrorf("Could not write header to streams: %v\n", err)
-	}
-	channels[streamPath] = ch
-	l.Unlock()
-
-	stats.startStream()
-
-	common.LogInfoln("Stream started")
-	err = avutil.CopyPackets(ch.que, conn)
-	if err != nil {
-		common.LogErrorf("Could not copy packets to connections: %v\n", err)
-	}
-	common.LogInfoln("Stream finished")
-
-	stats.endStream()
-
-	l.Lock()
-	delete(channels, streamPath)
-	l.Unlock()
-	ch.que.Close()
-}
-
-func handlePlay(conn *rtmp.Conn) {
-	l.RLock()
-	ch := channels[conn.URL.Path]
-	l.RUnlock()
-
-	if ch != nil {
-		cursor := ch.que.Latest()
-		err := avutil.CopyFile(conn, cursor)
-		if err != nil {
-			common.LogErrorf("Could not copy video to connection: %v\n", err)
-		}
-	}
-}
-
-func handleLive(w http.ResponseWriter, r *http.Request) {
-	l.RLock()
-	ch := channels[strings.Trim(r.URL.Path, "/")]
-	l.RUnlock()
-
-	if ch != nil {
-		w.Header().Set("Content-Type", "video/x-flv")
-		w.Header().Set("Transfer-Encoding", "chunked")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.WriteHeader(200)
-		flusher := w.(http.Flusher)
-		flusher.Flush()
-
-		muxer := flv.NewMuxerWriteFlusher(writeFlusher{httpflusher: flusher, Writer: w})
-		cursor := ch.que.Latest()
-
-		session, _ := sstore.Get(r, "moviesession")
-		stats.addViewer(session.ID)
-		err := avutil.CopyFile(muxer, cursor)
-		if err != nil {
-			common.LogErrorf("Could not copy video to connection: %v\n", err)
-		}
-		stats.removeViewer(session.ID)
-	} else {
-		// Maybe HTTP_204 is better than HTTP_404
-		w.WriteHeader(http.StatusNoContent)
-		stats.resetViewers()
 	}
 }
 

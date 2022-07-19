@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/gorilla/sessions"
-	"github.com/nareix/joy4/format"
-	"github.com/nareix/joy4/format/rtmp"
 	"github.com/zorchenhimer/MovieNight/common"
 )
 
@@ -59,8 +57,6 @@ func main() {
 	flag.BoolVar(&pullEmotes, "e", false, "Pull emotes")
 	flag.StringVar(&confFile, "f", "./settings.json", "URI of the conf file")
 	flag.Parse()
-
-	format.RegisterAll()
 
 	if err := setupSettings(); err != nil {
 		fmt.Printf("Error loading settings: %v\n", err)
@@ -114,12 +110,6 @@ func main() {
 	common.LogInfoln("RoomAccess: ", settings.RoomAccess)
 	common.LogInfoln("RoomAccessPin: ", settings.RoomAccessPin)
 
-	rtmpServer := &rtmp.Server{
-		HandlePlay:    handlePlay,
-		HandlePublish: handlePublish,
-		Addr:          rtmpAddr,
-	}
-
 	router := http.NewServeMux()
 
 	router.HandleFunc("/ws", wsHandler) // Chat websocket
@@ -144,7 +134,7 @@ func main() {
 
 	// RTMP Server
 	go func() {
-		err := rtmpServer.ListenAndServe()
+		err := startRtmp(rtmpAddr)
 		if err != nil {
 			// If the server cannot start, don't pretend we can continue.
 			panic("Error trying to start rtmp server: " + err.Error())
